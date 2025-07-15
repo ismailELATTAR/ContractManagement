@@ -1,0 +1,200 @@
+# Docker Compose for Contract Repository System
+# Development Environment Setup
+# Banque Populaire - Contract Management
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: contract-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: contract_repository_dev
+      POSTGRES_USER: contract_user
+      POSTGRES_PASSWORD: contract_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - contract-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contract_user -d contract_repository_dev"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Keycloak for Authentication
+  keycloak:
+    image: quay.io/keycloak/keycloak:22.0
+    container_name: contract-keycloak
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin123
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: contract_user
+      KC_DB_PASSWORD: contract_password
+      KC_HOSTNAME: localhost
+      KC_HTTP_ENABLED: true
+    ports:
+      - "8180:8080"
+    volumes:
+      - ./docker/keycloak:/opt/keycloak/data/import
+    networks:
+      - contract-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - start-dev
+      - --import-realm
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # MailHog for Email Testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: contract-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP server
+      - "8025:8025"  # Web UI
+    networks:
+      - contract-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8025 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for Caching (Optional - for future use)
+  redis:
+    image: redis:7-alpine
+    container_name: contract-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - contract-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # WireMock for External Service Mocking
+  wiremock:
+    image: wiremock/wiremock:2.35.0
+    container_name: contract-wiremock
+    restart: unless-stopped
+    ports:
+      - "8081:8080"  # T24 Mock
+    volumes:
+      - ./docker/wiremock/mappings:/home/wiremock/mappings
+      - ./docker/wiremock/__files:/home/wiremock/__files
+    networks:
+      - contract-network
+    command:
+      - --port
+      - "8080"
+      - --verbose
+      - --global-response-templating
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/__admin/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Additional WireMock for Evolan (different port)
+  wiremock-evolan:
+    image: wiremock/wiremock:2.35.0
+    container_name: contract-wiremock-evolan
+    restart: unless-stopped
+    ports:
+      - "8082:8080"  # Evolan Mock
+    volumes:
+      - ./docker/wiremock-evolan/mappings:/home/wiremock/mappings
+      - ./docker/wiremock-evolan/__files:/home/wiremock/__files
+    networks:
+      - contract-network
+    command:
+      - --port
+      - "8080"
+      - --verbose
+      - --global-response-templating
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/__admin/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # pgAdmin for Database Management (Optional)
+  pgadmin:
+    image: dpage/pgadmin4:7
+    container_name: contract-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@banquepopulaire.ma
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - contract-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+# Named Volumes for Data Persistence
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+# Custom Network
+networks:
+  contract-network:
+    driver: bridge
+
+# Development Scripts (use with docker-compose commands)
+#
+# Start all services:
+#   docker-compose up -d
+#
+# Start only database:
+#   docker-compose up -d postgres
+#
+# View logs:
+#   docker-compose logs -f [service_name]
+#
+# Stop all services:
+#   docker-compose down
+#
+# Reset everything (careful - deletes data):
+#   docker-compose down -v
+#
+# Services Access:
+# - PostgreSQL: localhost:5432
+# - Keycloak Admin: http://localhost:8180 (admin/admin123)
+# - MailHog UI: http://localhost:8025
+# - pgAdmin: http://localhost:5050 (admin@banquepopulaire.ma/admin123)
+# - WireMock T24: http://localhost:8081
+# - WireMock Evolan: http://localhost:8082
+# - Redis: localhost:6379
